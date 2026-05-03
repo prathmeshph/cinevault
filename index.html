@@ -1,0 +1,912 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>CineVault – Stream from Drive</title>
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet"/>
+  <style>
+    :root {
+      --bg: #080b10;
+      --surface: #0f1520;
+      --card: #141c2b;
+      --border: #1e2d45;
+      --accent: #e8b84b;
+      --accent2: #c97b2e;
+      --text: #e8edf5;
+      --muted: #6b7f99;
+      --danger: #e05252;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'DM Sans', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* ── Noise overlay ── */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* ══════════════════ LOGIN SCREEN ══════════════════ */
+    #login-screen {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      position: relative;
+      z-index: 1;
+    }
+
+    .login-glow {
+      position: absolute;
+      width: 600px; height: 600px;
+      background: radial-gradient(circle, rgba(232,184,75,0.12) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    .login-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      padding: 60px 56px;
+      text-align: center;
+      max-width: 460px;
+      width: 90%;
+      position: relative;
+      box-shadow: 0 40px 100px rgba(0,0,0,0.6);
+    }
+
+    .logo-icon {
+      font-size: 3rem;
+      margin-bottom: 16px;
+      display: block;
+    }
+
+    .login-box h1 {
+      font-family: 'Playfair Display', serif;
+      font-size: 2.4rem;
+      font-weight: 900;
+      letter-spacing: -0.5px;
+      background: linear-gradient(135deg, #e8b84b, #f5d98e);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 8px;
+    }
+
+    .login-box p {
+      color: var(--muted);
+      font-size: 0.95rem;
+      margin-bottom: 40px;
+      line-height: 1.6;
+    }
+
+    .btn-google {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      background: white;
+      color: #1f1f1f;
+      border: none;
+      border-radius: 14px;
+      padding: 16px 32px;
+      font-size: 1rem;
+      font-weight: 500;
+      font-family: 'DM Sans', sans-serif;
+      cursor: pointer;
+      width: 100%;
+      transition: all 0.2s;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    }
+    .btn-google:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 30px rgba(0,0,0,0.4);
+    }
+    .btn-google svg { flex-shrink: 0; }
+
+    .setup-note {
+      margin-top: 28px;
+      padding: 16px;
+      background: rgba(232,184,75,0.08);
+      border: 1px solid rgba(232,184,75,0.2);
+      border-radius: 12px;
+      font-size: 0.82rem;
+      color: var(--muted);
+      text-align: left;
+      line-height: 1.7;
+    }
+    .setup-note strong { color: var(--accent); }
+
+    /* ══════════════════ CONFIG MODAL ══════════════════ */
+    #config-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.85);
+      backdrop-filter: blur(8px);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+    }
+    #config-modal.open { display: flex; }
+
+    .modal-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 40px;
+      max-width: 540px;
+      width: 92%;
+      box-shadow: 0 40px 100px rgba(0,0,0,0.7);
+    }
+    .modal-box h2 {
+      font-family: 'Playfair Display', serif;
+      font-size: 1.6rem;
+      margin-bottom: 8px;
+      color: var(--accent);
+    }
+    .modal-box p { color: var(--muted); font-size: 0.9rem; margin-bottom: 24px; line-height: 1.6; }
+
+    .field { margin-bottom: 18px; }
+    .field label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 6px; }
+    .field input {
+      width: 100%;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 16px;
+      color: var(--text);
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.9rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .field input:focus { border-color: var(--accent); }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      color: #0a0a0a;
+      border: none;
+      border-radius: 12px;
+      padding: 14px 28px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      font-family: 'DM Sans', sans-serif;
+      cursor: pointer;
+      transition: all 0.2s;
+      width: 100%;
+    }
+    .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 8px 24px rgba(232,184,75,0.3); }
+
+    /* ══════════════════ MAIN APP ══════════════════ */
+    #app { display: none; position: relative; z-index: 1; min-height: 100vh; }
+
+    /* Header */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 20px 40px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(8,11,16,0.8);
+      backdrop-filter: blur(12px);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .header-logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .header-logo span:first-child { font-size: 1.4rem; }
+    .header-logo strong {
+      font-family: 'Playfair Display', serif;
+      font-size: 1.3rem;
+      background: linear-gradient(135deg, #e8b84b, #f5d98e);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .search-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 8px 16px;
+    }
+    .search-bar input {
+      background: none;
+      border: none;
+      color: var(--text);
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.9rem;
+      outline: none;
+      width: 200px;
+    }
+    .search-bar input::placeholder { color: var(--muted); }
+
+    .user-pill {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 100px;
+      padding: 6px 14px 6px 6px;
+    }
+    .user-pill img {
+      width: 30px; height: 30px;
+      border-radius: 50%;
+      object-fit: cover;
+    }
+    .user-pill span { font-size: 0.85rem; color: var(--muted); }
+
+    .btn-signout {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--muted);
+      padding: 8px 16px;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-signout:hover { border-color: var(--danger); color: var(--danger); }
+
+    /* Hero */
+    .hero {
+      padding: 40px 40px 20px;
+    }
+    .hero h2 {
+      font-family: 'Playfair Display', serif;
+      font-size: 2rem;
+      font-weight: 700;
+    }
+    .hero h2 span { color: var(--accent); }
+
+    /* Stats bar */
+    .stats-bar {
+      display: flex;
+      gap: 20px;
+      padding: 0 40px 30px;
+    }
+    .stat {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 14px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .stat-val { font-size: 1.4rem; font-weight: 500; color: var(--accent); }
+    .stat-label { font-size: 0.78rem; color: var(--muted); }
+
+    /* Controls */
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 40px 24px;
+      flex-wrap: wrap;
+    }
+
+    .btn-refresh {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--text);
+      padding: 10px 18px;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.88rem;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-refresh:hover { border-color: var(--accent); color: var(--accent); }
+
+    .sort-select {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--text);
+      padding: 10px 16px;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.88rem;
+      outline: none;
+      cursor: pointer;
+    }
+
+    /* Grid */
+    .grid-section { padding: 0 40px 60px; }
+
+    #movies-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 20px;
+    }
+
+    .movie-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      overflow: hidden;
+      cursor: pointer;
+      transition: all 0.25s;
+      animation: fadeIn 0.4s ease both;
+    }
+    .movie-card:hover {
+      transform: translateY(-6px);
+      border-color: var(--accent);
+      box-shadow: 0 20px 50px rgba(0,0,0,0.5), 0 0 0 1px rgba(232,184,75,0.2);
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(12px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .card-thumb {
+      height: 120px;
+      background: linear-gradient(135deg, #1a2535, #0f1a28);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      overflow: hidden;
+    }
+    .card-thumb::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(135deg, rgba(232,184,75,0.05), rgba(201,123,46,0.05));
+    }
+    .card-thumb .play-icon {
+      width: 48px; height: 48px;
+      background: rgba(232,184,75,0.15);
+      border: 2px solid rgba(232,184,75,0.4);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.2rem;
+      transition: all 0.2s;
+    }
+    .movie-card:hover .play-icon {
+      background: rgba(232,184,75,0.3);
+      border-color: var(--accent);
+      transform: scale(1.1);
+    }
+
+    .card-info { padding: 14px 16px; }
+    .card-title {
+      font-size: 0.88rem;
+      font-weight: 500;
+      line-height: 1.4;
+      margin-bottom: 6px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .card-size {
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+    .card-badge {
+      display: inline-block;
+      background: rgba(232,184,75,0.15);
+      color: var(--accent);
+      font-size: 0.68rem;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      padding: 2px 8px;
+      border-radius: 100px;
+      margin-bottom: 6px;
+    }
+
+    /* Empty / Loading states */
+    .state-box {
+      text-align: center;
+      padding: 80px 20px;
+      color: var(--muted);
+    }
+    .state-box .icon { font-size: 3rem; margin-bottom: 16px; }
+    .state-box p { font-size: 0.95rem; line-height: 1.6; }
+    .spinner {
+      width: 40px; height: 40px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin: 0 auto 20px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ══════════════════ PLAYER MODAL ══════════════════ */
+    #player-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.95);
+      backdrop-filter: blur(16px);
+      z-index: 500;
+      flex-direction: column;
+    }
+    #player-modal.open { display: flex; }
+
+    .player-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 20px 32px;
+      background: rgba(8,11,16,0.6);
+    }
+    .player-title {
+      font-family: 'Playfair Display', serif;
+      font-size: 1.2rem;
+      max-width: 60%;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .btn-close {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--muted);
+      padding: 8px 18px;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.88rem;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-close:hover { border-color: var(--danger); color: var(--danger); }
+
+    .player-wrap {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    #video-player {
+      max-width: 1100px;
+      width: 100%;
+      border-radius: 16px;
+      background: #000;
+      box-shadow: 0 0 80px rgba(0,0,0,0.8);
+      outline: none;
+      max-height: 75vh;
+    }
+
+    .player-info {
+      padding: 14px 32px 24px;
+      text-align: center;
+    }
+    .player-info p { font-size: 0.82rem; color: var(--muted); }
+    .player-info a {
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 0.82rem;
+    }
+    .player-info a:hover { text-decoration: underline; }
+
+    /* Toast */
+    #toast {
+      position: fixed;
+      bottom: 30px;
+      left: 50%;
+      transform: translateX(-50%) translateY(80px);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px 24px;
+      font-size: 0.88rem;
+      color: var(--text);
+      z-index: 9999;
+      transition: transform 0.3s ease;
+      white-space: nowrap;
+    }
+    #toast.show { transform: translateX(-50%) translateY(0); }
+
+    /* Responsive */
+    @media (max-width: 700px) {
+      header { padding: 14px 20px; }
+      .hero, .stats-bar, .controls, .grid-section { padding-left: 20px; padding-right: 20px; }
+      .search-bar input { width: 120px; }
+      #movies-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ─── CONFIG MODAL ─── -->
+<div id="config-modal">
+  <div class="modal-box">
+    <h2>⚙️ Setup CineVault</h2>
+    <p>
+      To use this app you need a <strong>Google OAuth 2.0 Client ID</strong> with the Drive API enabled.
+      This is a one-time setup. Your credentials are saved locally in your browser.<br><br>
+      <strong>Steps:</strong><br>
+      1. Go to <a href="https://console.cloud.google.com/" target="_blank" style="color:var(--accent)">Google Cloud Console</a><br>
+      2. Create a project → Enable <em>Google Drive API</em><br>
+      3. OAuth consent screen → Add yourself as test user<br>
+      4. Credentials → Create <em>OAuth 2.0 Client ID</em> (Web application)<br>
+      5. Add <strong>this page's URL</strong> as Authorized JavaScript origin
+    </p>
+    <div class="field">
+      <label>Google OAuth Client ID</label>
+      <input type="text" id="client-id-input" placeholder="xxxxxxxxxxxx.apps.googleusercontent.com"/>
+    </div>
+    <button class="btn-primary" onclick="saveConfig()">Save & Continue</button>
+  </div>
+</div>
+
+<!-- ─── LOGIN SCREEN ─── -->
+<div id="login-screen">
+  <div class="login-glow"></div>
+  <div class="login-box">
+    <span class="logo-icon">🎬</span>
+    <h1>CineVault</h1>
+    <p>Stream your Google Drive movies directly in your browser — on any device, any time.</p>
+    <button class="btn-google" onclick="signIn()">
+      <svg width="20" height="20" viewBox="0 0 24 24">
+        <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+        <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+        <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
+        <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+      </svg>
+      Continue with Google
+    </button>
+    <div class="setup-note">
+      <strong>First time?</strong> You'll need a Google Cloud OAuth Client ID.
+      <span id="config-link-text">
+        <a href="#" onclick="openConfig()" style="color:var(--accent)">Click here to set it up</a> — takes ~5 minutes.
+      </span>
+    </div>
+  </div>
+</div>
+
+<!-- ─── MAIN APP ─── -->
+<div id="app">
+  <header>
+    <div class="header-logo">
+      <span>🎬</span>
+      <strong>CineVault</strong>
+    </div>
+    <div class="search-bar">
+      <svg width="16" height="16" fill="none" stroke="#6b7f99" stroke-width="2" viewBox="0 0 24 24">
+        <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+      </svg>
+      <input type="text" id="search-input" placeholder="Search movies…" oninput="filterMovies()"/>
+    </div>
+    <div class="header-right">
+      <div class="user-pill">
+        <img id="user-avatar" src="" alt=""/>
+        <span id="user-name">Loading…</span>
+      </div>
+      <button class="btn-signout" onclick="signOut()">Sign out</button>
+    </div>
+  </header>
+
+  <div class="hero">
+    <h2>Your <span>Movie Library</span></h2>
+  </div>
+
+  <div class="stats-bar">
+    <div class="stat">
+      <span class="stat-val" id="stat-count">—</span>
+      <span class="stat-label">Movies found</span>
+    </div>
+    <div class="stat">
+      <span class="stat-val" id="stat-size">—</span>
+      <span class="stat-label">Total size</span>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="btn-refresh" onclick="loadMovies()">
+      <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+      </svg>
+      Refresh Library
+    </button>
+    <select class="sort-select" id="sort-select" onchange="renderMovies()">
+      <option value="name">Sort: Name</option>
+      <option value="size">Sort: Size</option>
+      <option value="date">Sort: Date Modified</option>
+    </select>
+  </div>
+
+  <div class="grid-section">
+    <div id="movies-grid"></div>
+  </div>
+</div>
+
+<!-- ─── PLAYER MODAL ─── -->
+<div id="player-modal">
+  <div class="player-header">
+    <span class="player-title" id="player-title">Now Playing…</span>
+    <button class="btn-close" onclick="closePlayer()">✕ Close</button>
+  </div>
+  <div class="player-wrap">
+    <video id="video-player" controls autoplay>
+      Your browser does not support the video tag.
+    </video>
+  </div>
+  <div class="player-info">
+    <p>If playback doesn't start, <a id="direct-link" href="#" target="_blank">open in new tab ↗</a></p>
+  </div>
+</div>
+
+<!-- ─── TOAST ─── -->
+<div id="toast"></div>
+
+<!-- ─── SCRIPTS ─── -->
+<script>
+  /* ══ Config ══ */
+  const SCOPES = 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/userinfo.profile';
+  let tokenClient = null;
+  let accessToken = null;
+  let allMovies = [];
+
+  function getClientId() {
+    return localStorage.getItem('cvault_client_id') || '';
+  }
+
+  function openConfig() {
+    const modal = document.getElementById('config-modal');
+    modal.classList.add('open');
+    document.getElementById('client-id-input').value = getClientId();
+  }
+
+  function saveConfig() {
+    const val = document.getElementById('client-id-input').value.trim();
+    if (!val) { showToast('Please enter a Client ID'); return; }
+    localStorage.setItem('cvault_client_id', val);
+    document.getElementById('config-modal').classList.remove('open');
+    showToast('✅ Client ID saved! You can now sign in.');
+    initGIS();
+  }
+
+  /* ══ Google Identity Services ══ */
+  function loadGIS() {
+    const script = document.createElement('script');
+    script.src = 'https://accounts.google.com/gsi/client';
+    script.onload = initGIS;
+    document.head.appendChild(script);
+  }
+
+  function initGIS() {
+    const clientId = getClientId();
+    if (!clientId || !window.google) return;
+    tokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: SCOPES,
+      callback: handleTokenResponse,
+    });
+  }
+
+  function signIn() {
+    if (!getClientId()) {
+      openConfig();
+      return;
+    }
+    if (!tokenClient) {
+      showToast('Initialising Google Sign-In…');
+      initGIS();
+      setTimeout(() => tokenClient && tokenClient.requestAccessToken(), 800);
+      return;
+    }
+    tokenClient.requestAccessToken();
+  }
+
+  async function handleTokenResponse(resp) {
+    if (resp.error) { showToast('Sign-in error: ' + resp.error); return; }
+    accessToken = resp.access_token;
+    await loadUserProfile();
+    showApp();
+    loadMovies();
+  }
+
+  async function loadUserProfile() {
+    const r = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    const user = await r.json();
+    document.getElementById('user-name').textContent = user.given_name || user.name || 'User';
+    document.getElementById('user-avatar').src = user.picture || '';
+  }
+
+  function signOut() {
+    google.accounts.oauth2.revoke(accessToken, () => {});
+    accessToken = null;
+    allMovies = [];
+    document.getElementById('app').style.display = 'none';
+    document.getElementById('login-screen').style.display = 'flex';
+    closePlayer();
+  }
+
+  /* ══ App Views ══ */
+  function showApp() {
+    document.getElementById('login-screen').style.display = 'none';
+    document.getElementById('app').style.display = 'block';
+  }
+
+  /* ══ Drive API ══ */
+  async function loadMovies() {
+    const grid = document.getElementById('movies-grid');
+    grid.innerHTML = `<div class="state-box" style="grid-column:1/-1"><div class="spinner"></div><p>Scanning your Drive for .mp4 files…</p></div>`;
+
+    allMovies = [];
+    let pageToken = null;
+
+    try {
+      do {
+        const params = new URLSearchParams({
+          q: "mimeType='video/mp4' and trashed=false",
+          fields: 'nextPageToken,files(id,name,size,modifiedTime,mimeType)',
+          pageSize: 200,
+          orderBy: 'name',
+          ...(pageToken ? { pageToken } : {})
+        });
+        const r = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`, {
+          headers: { Authorization: `Bearer ${accessToken}` }
+        });
+        const data = await r.json();
+        if (data.error) throw new Error(data.error.message);
+        allMovies.push(...(data.files || []));
+        pageToken = data.nextPageToken;
+      } while (pageToken);
+
+      updateStats();
+      renderMovies();
+    } catch (err) {
+      grid.innerHTML = `<div class="state-box" style="grid-column:1/-1"><div class="icon">⚠️</div><p>${err.message}</p></div>`;
+    }
+  }
+
+  function updateStats() {
+    document.getElementById('stat-count').textContent = allMovies.length;
+    const total = allMovies.reduce((s, f) => s + (parseInt(f.size) || 0), 0);
+    document.getElementById('stat-size').textContent = formatSize(total);
+  }
+
+  function renderMovies() {
+    const q = document.getElementById('search-input').value.toLowerCase();
+    const sort = document.getElementById('sort-select').value;
+    const grid = document.getElementById('movies-grid');
+
+    let list = allMovies.filter(f => f.name.toLowerCase().includes(q));
+
+    if (sort === 'size') list.sort((a, b) => (parseInt(b.size) || 0) - (parseInt(a.size) || 0));
+    else if (sort === 'date') list.sort((a, b) => new Date(b.modifiedTime) - new Date(a.modifiedTime));
+    else list.sort((a, b) => a.name.localeCompare(b.name));
+
+    if (!list.length) {
+      grid.innerHTML = `<div class="state-box" style="grid-column:1/-1"><div class="icon">${q ? '🔍' : '📂'}</div><p>${q ? 'No movies match your search.' : 'No .mp4 files found in your Drive.'}</p></div>`;
+      return;
+    }
+
+    grid.innerHTML = list.map((f, i) => `
+      <div class="movie-card" style="animation-delay:${Math.min(i * 30, 400)}ms" onclick="playMovie('${f.id}','${escHtml(f.name)}')">
+        <div class="card-thumb">
+          <div class="play-icon">▶</div>
+        </div>
+        <div class="card-info">
+          <div class="card-badge">MP4</div>
+          <div class="card-title" title="${escHtml(f.name)}">${escHtml(cleanName(f.name))}</div>
+          <div class="card-size">${formatSize(parseInt(f.size) || 0)}</div>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  function filterMovies() { renderMovies(); }
+
+  /* ══ Player ══ */
+  function playMovie(id, name) {
+    const url = `https://www.googleapis.com/drive/v3/files/${id}?alt=media`;
+    const video = document.getElementById('video-player');
+
+    // Use fetch with Authorization header via MediaSource for streaming
+    // Simplest cross-browser: set src with token in query won't work; use Blob URL approach
+    showToast('⏳ Loading movie…');
+
+    fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } })
+      .then(r => {
+        if (!r.ok) throw new Error('Could not fetch video. Check Drive permissions.');
+        return r.blob();
+      })
+      .then(blob => {
+        const blobUrl = URL.createObjectURL(blob);
+        video.src = blobUrl;
+        video.load();
+        video.play();
+        showToast('▶ Playing ' + cleanName(name));
+      })
+      .catch(err => {
+        showToast('Error: ' + err.message);
+        // Fallback: direct link
+        document.getElementById('direct-link').href =
+          `https://drive.google.com/file/d/${id}/view`;
+      });
+
+    document.getElementById('player-title').textContent = cleanName(name);
+    document.getElementById('direct-link').href = `https://drive.google.com/file/d/${id}/view`;
+    document.getElementById('player-modal').classList.add('open');
+    document.body.style.overflow = 'hidden';
+  }
+
+  function closePlayer() {
+    const video = document.getElementById('video-player');
+    video.pause();
+    if (video.src.startsWith('blob:')) URL.revokeObjectURL(video.src);
+    video.src = '';
+    document.getElementById('player-modal').classList.remove('open');
+    document.body.style.overflow = '';
+  }
+
+  // Close on Escape
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closePlayer(); });
+
+  /* ══ Helpers ══ */
+  function cleanName(name) {
+    return name.replace(/\.(mp4|mkv|avi|mov)$/i, '')
+               .replace(/[._-]+/g, ' ')
+               .replace(/\b(\d{4})\b/, '($1)')
+               .trim();
+  }
+
+  function formatSize(bytes) {
+    if (!bytes) return '—';
+    const gb = bytes / 1073741824;
+    if (gb >= 1) return gb.toFixed(2) + ' GB';
+    return (bytes / 1048576).toFixed(0) + ' MB';
+  }
+
+  function escHtml(str) {
+    return str.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  function showToast(msg) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    clearTimeout(t._t);
+    t._t = setTimeout(() => t.classList.remove('show'), 3000);
+  }
+
+  /* ══ Boot ══ */
+  loadGIS();
+</script>
+</body>
+</html>
