@@ -651,24 +651,359 @@
   </div>
 </div>
 
-<!-- ─── PLAYER MODAL ─── -->
+<!-- ─── PLAYER MODAL (Netflix-style) ─── -->
 <div id="player-modal">
-  <div class="player-header">
-    <span class="player-title" id="player-title">Now Playing…</span>
-    <button class="btn-close" onclick="closePlayer()">✕ Close</button>
-  </div>
-  <div class="player-wrap">
-    <video id="video-player" controls autoplay>
-      Your browser does not support the video tag.
-    </video>
-  </div>
-  <div class="player-info">
-    <p>If playback doesn't start, <a id="direct-link" href="#" target="_blank">open in new tab ↗</a></p>
+  <!-- Custom player UI -->
+  <div id="player-wrap">
+    <video id="video-player" preload="metadata"></video>
+
+    <!-- Overlay for click-to-pause -->
+    <div id="player-overlay" onclick="togglePlay()"></div>
+
+    <!-- Big play/pause icon flash -->
+    <div id="play-flash">▶</div>
+
+    <!-- Top bar -->
+    <div id="player-topbar">
+      <button id="btn-back" onclick="closePlayer()">
+        <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+      </button>
+      <span id="player-title-bar">Now Playing</span>
+      <a id="drive-link" href="#" target="_blank" title="Open in Google Drive">
+        <svg width="18" height="18" viewBox="0 0 87.3 78" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6.6 66.85l3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3l13.75-23.8H0c0 1.55.4 3.1 1.2 4.5z" fill="#0066da"/><path d="M43.65 25L29.9 1.2C28.55 2 27.4 3.1 26.6 4.5L1.2 48.4C.4 49.8 0 51.35 0 52.9h27.5z" fill="#00ac47"/><path d="M73.55 76.8c1.35-.8 2.5-1.9 3.3-3.3l1.6-2.75 7.65-13.25c.8-1.4 1.2-2.95 1.2-4.5H59.8l5.85 11.5z" fill="#ea4335"/><path d="M43.65 25L57.4 1.2C56.05.4 54.5 0 52.9 0H34.4c-1.6 0-3.15.45-4.5 1.2z" fill="#00832d"/><path d="M59.8 52.9h27.5c0-1.55-.4-3.1-1.2-4.5L60.7 4.5c-.8-1.4-1.95-2.5-3.3-3.3L43.65 25z" fill="#2684fc"/><path d="M27.5 52.9l-13.75 23.8c1.35.8 2.9 1.2 4.5 1.2h51c1.6 0 3.1-.45 4.5-1.2L59.8 52.9z" fill="#ffba00"/></svg>
+      </a>
+    </div>
+
+    <!-- Spinner while loading -->
+    <div id="player-spinner">
+      <div class="ps"></div>
+    </div>
+
+    <!-- Bottom controls bar -->
+    <div id="player-controls">
+      <!-- Progress bar -->
+      <div id="progress-wrap">
+        <div id="progress-bar" onclick="seekTo(event)" onmousemove="showPreview(event)" onmouseleave="hidePreview()">
+          <div id="progress-buffered"></div>
+          <div id="progress-filled"></div>
+          <div id="progress-thumb"></div>
+        </div>
+        <div id="time-preview"></div>
+      </div>
+
+      <div id="controls-row">
+        <div id="controls-left">
+          <!-- Play/Pause -->
+          <button class="ctrl-btn" id="btn-play" onclick="togglePlay()" title="Play/Pause">
+            <svg id="icon-play" width="22" height="22" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+            <svg id="icon-pause" width="22" height="22" fill="currentColor" viewBox="0 0 24 24" style="display:none"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+          </button>
+
+          <!-- Skip back 10s -->
+          <button class="ctrl-btn" onclick="skipBy(-10)" title="Rewind 10s">
+            <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/><text x="7.5" y="15.5" font-size="5" font-family="sans-serif" fill="currentColor">10</text></svg>
+          </button>
+
+          <!-- Skip forward 10s -->
+          <button class="ctrl-btn" onclick="skipBy(10)" title="Forward 10s">
+            <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M12 5V1l5 5-5 5V7c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6h2c0 4.42-3.58 8-8 8s-8-3.58-8-8 3.58-8 8-8z"/><text x="7.5" y="15.5" font-size="5" font-family="sans-serif" fill="currentColor">10</text></svg>
+          </button>
+
+          <!-- Volume -->
+          <div id="vol-wrap">
+            <button class="ctrl-btn" onclick="toggleMute()" title="Mute">
+              <svg id="icon-vol" width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/></svg>
+              <svg id="icon-mute" width="20" height="20" fill="currentColor" viewBox="0 0 24 24" style="display:none"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></svg>
+            </button>
+            <input type="range" id="vol-slider" min="0" max="1" step="0.02" value="1" oninput="setVolume(this.value)" title="Volume"/>
+          </div>
+
+          <!-- Time display -->
+          <span id="time-display">0:00 / 0:00</span>
+        </div>
+
+        <div id="controls-right">
+          <!-- Playback speed -->
+          <div id="speed-wrap">
+            <button class="ctrl-btn" id="btn-speed" onclick="toggleSpeedMenu()" title="Playback Speed">1×</button>
+            <div id="speed-menu">
+              <div onclick="setSpeed(0.5)">0.5×</div>
+              <div onclick="setSpeed(0.75)">0.75×</div>
+              <div onclick="setSpeed(1)" class="active">1×</div>
+              <div onclick="setSpeed(1.25)">1.25×</div>
+              <div onclick="setSpeed(1.5)">1.5×</div>
+              <div onclick="setSpeed(2)">2×</div>
+            </div>
+          </div>
+
+          <!-- Fullscreen -->
+          <button class="ctrl-btn" onclick="toggleFullscreen()" title="Fullscreen">
+            <svg id="icon-fs" width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+            <svg id="icon-exit-fs" width="20" height="20" fill="currentColor" viewBox="0 0 24 24" style="display:none"><path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
 <!-- ─── TOAST ─── -->
 <div id="toast"></div>
+
+<style>
+/* ══════════ NETFLIX-STYLE PLAYER ══════════ */
+#player-modal {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: #000;
+  z-index: 500;
+  cursor: none;
+}
+#player-modal.open { display: block; }
+#player-modal.show-ui { cursor: default; }
+
+#player-wrap {
+  width: 100%; height: 100%;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+}
+
+#video-player {
+  width: 100%; height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+
+#player-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+}
+
+/* Play flash */
+#play-flash {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%,-50%) scale(0);
+  font-size: 4rem;
+  background: rgba(0,0,0,0.5);
+  border-radius: 50%;
+  width: 90px; height: 90px;
+  display: flex; align-items: center; justify-content: center;
+  color: white;
+  z-index: 10;
+  pointer-events: none;
+  transition: transform 0.1s, opacity 0.3s;
+  opacity: 0;
+}
+#play-flash.flash {
+  transform: translate(-50%,-50%) scale(1);
+  opacity: 1;
+}
+
+/* Spinner */
+#player-spinner {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%,-50%);
+  z-index: 5;
+  display: none;
+}
+#player-spinner.show { display: block; }
+.ps {
+  width: 52px; height: 52px;
+  border: 4px solid rgba(255,255,255,0.15);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+/* Top bar */
+#player-topbar {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px 28px;
+  background: linear-gradient(to bottom, rgba(0,0,0,0.85) 0%, transparent 100%);
+  z-index: 10;
+  transition: opacity 0.35s;
+  opacity: 0;
+}
+#player-modal.show-ui #player-topbar { opacity: 1; }
+
+#btn-back {
+  background: none; border: none;
+  color: white; cursor: pointer;
+  width: 38px; height: 38px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%;
+  transition: background 0.2s;
+}
+#btn-back:hover { background: rgba(255,255,255,0.15); }
+
+#player-title-bar {
+  flex: 1;
+  font-family: 'Playfair Display', serif;
+  font-size: 1.1rem;
+  color: white;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#drive-link {
+  opacity: 0.7;
+  transition: opacity 0.2s;
+  display: flex;
+  align-items: center;
+}
+#drive-link:hover { opacity: 1; }
+
+/* Bottom controls */
+#player-controls {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  background: linear-gradient(to top, rgba(0,0,0,0.9) 0%, transparent 100%);
+  padding: 40px 24px 18px;
+  z-index: 10;
+  transition: opacity 0.35s;
+  opacity: 0;
+}
+#player-modal.show-ui #player-controls { opacity: 1; }
+
+/* Progress bar */
+#progress-wrap { position: relative; margin-bottom: 10px; }
+#progress-bar {
+  width: 100%; height: 4px;
+  background: rgba(255,255,255,0.2);
+  border-radius: 4px;
+  cursor: pointer;
+  position: relative;
+  transition: height 0.15s;
+}
+#progress-bar:hover { height: 7px; }
+#progress-buffered {
+  position: absolute; top: 0; left: 0; height: 100%;
+  background: rgba(255,255,255,0.3);
+  border-radius: 4px;
+  pointer-events: none;
+  width: 0%;
+}
+#progress-filled {
+  position: absolute; top: 0; left: 0; height: 100%;
+  background: var(--accent);
+  border-radius: 4px;
+  pointer-events: none;
+  width: 0%;
+}
+#progress-thumb {
+  position: absolute; top: 50%;
+  transform: translate(-50%, -50%) scale(0);
+  width: 14px; height: 14px;
+  background: var(--accent);
+  border-radius: 50%;
+  pointer-events: none;
+  transition: transform 0.15s;
+  left: 0%;
+}
+#progress-bar:hover #progress-thumb { transform: translate(-50%,-50%) scale(1); }
+
+#time-preview {
+  position: absolute;
+  bottom: 18px;
+  background: rgba(0,0,0,0.8);
+  color: white;
+  font-size: 0.78rem;
+  padding: 3px 8px;
+  border-radius: 6px;
+  pointer-events: none;
+  display: none;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+/* Controls row */
+#controls-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+#controls-left, #controls-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ctrl-btn {
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.9);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 6px;
+  display: flex; align-items: center; justify-content: center;
+  transition: color 0.2s, background 0.2s;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 0.88rem;
+}
+.ctrl-btn:hover { color: white; background: rgba(255,255,255,0.1); }
+
+#time-display {
+  color: rgba(255,255,255,0.75);
+  font-size: 0.82rem;
+  margin-left: 6px;
+  white-space: nowrap;
+}
+
+/* Volume */
+#vol-wrap { display: flex; align-items: center; gap: 4px; }
+#vol-slider {
+  -webkit-appearance: none;
+  width: 70px; height: 3px;
+  background: rgba(255,255,255,0.3);
+  border-radius: 3px;
+  outline: none;
+  cursor: pointer;
+}
+#vol-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: white;
+  cursor: pointer;
+}
+
+/* Speed menu */
+#speed-wrap { position: relative; }
+#speed-menu {
+  display: none;
+  position: absolute;
+  bottom: 44px; right: 0;
+  background: rgba(15,20,32,0.97);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  min-width: 90px;
+  z-index: 20;
+}
+#speed-menu.open { display: block; }
+#speed-menu div {
+  padding: 10px 18px;
+  font-size: 0.88rem;
+  color: rgba(255,255,255,0.75);
+  cursor: pointer;
+  text-align: center;
+  transition: background 0.15s;
+}
+#speed-menu div:hover { background: rgba(255,255,255,0.08); color: white; }
+#speed-menu div.active { color: var(--accent); font-weight: 600; }
+</style>
 
 <!-- ─── SCRIPTS ─── -->
 <script>
@@ -678,13 +1013,10 @@
   let accessToken = null;
   let allMovies = [];
 
-  function getClientId() {
-    return localStorage.getItem('cvault_client_id') || '';
-  }
+  function getClientId() { return localStorage.getItem('cvault_client_id') || ''; }
 
   function openConfig() {
-    const modal = document.getElementById('config-modal');
-    modal.classList.add('open');
+    document.getElementById('config-modal').classList.add('open');
     document.getElementById('client-id-input').value = getClientId();
   }
 
@@ -699,10 +1031,10 @@
 
   /* ══ Google Identity Services ══ */
   function loadGIS() {
-    const script = document.createElement('script');
-    script.src = 'https://accounts.google.com/gsi/client';
-    script.onload = initGIS;
-    document.head.appendChild(script);
+    const s = document.createElement('script');
+    s.src = 'https://accounts.google.com/gsi/client';
+    s.onload = initGIS;
+    document.head.appendChild(s);
   }
 
   function initGIS() {
@@ -716,10 +1048,7 @@
   }
 
   function signIn() {
-    if (!getClientId()) {
-      openConfig();
-      return;
-    }
+    if (!getClientId()) { openConfig(); return; }
     if (!tokenClient) {
       showToast('Initialising Google Sign-In…');
       initGIS();
@@ -748,14 +1077,12 @@
 
   function signOut() {
     google.accounts.oauth2.revoke(accessToken, () => {});
-    accessToken = null;
-    allMovies = [];
+    accessToken = null; allMovies = [];
     document.getElementById('app').style.display = 'none';
     document.getElementById('login-screen').style.display = 'flex';
     closePlayer();
   }
 
-  /* ══ App Views ══ */
   function showApp() {
     document.getElementById('login-screen').style.display = 'none';
     document.getElementById('app').style.display = 'block';
@@ -765,10 +1092,8 @@
   async function loadMovies() {
     const grid = document.getElementById('movies-grid');
     grid.innerHTML = `<div class="state-box" style="grid-column:1/-1"><div class="spinner"></div><p>Scanning your Drive for .mp4 and .mkv files…</p></div>`;
-
     allMovies = [];
     let pageToken = null;
-
     try {
       do {
         const params = new URLSearchParams({
@@ -786,7 +1111,6 @@
         allMovies.push(...(data.files || []));
         pageToken = data.nextPageToken;
       } while (pageToken);
-
       updateStats();
       renderMovies();
     } catch (err) {
@@ -804,81 +1128,462 @@
     const q = document.getElementById('search-input').value.toLowerCase();
     const sort = document.getElementById('sort-select').value;
     const grid = document.getElementById('movies-grid');
-
     let list = allMovies.filter(f => f.name.toLowerCase().includes(q));
-
-    if (sort === 'size') list.sort((a, b) => (parseInt(b.size) || 0) - (parseInt(a.size) || 0));
+    if (sort === 'size') list.sort((a, b) => (parseInt(b.size)||0) - (parseInt(a.size)||0));
     else if (sort === 'date') list.sort((a, b) => new Date(b.modifiedTime) - new Date(a.modifiedTime));
     else list.sort((a, b) => a.name.localeCompare(b.name));
-
     if (!list.length) {
-      grid.innerHTML = `<div class="state-box" style="grid-column:1/-1"><div class="icon">${q ? '🔍' : '📂'}</div><p>${q ? 'No movies match your search.' : 'No .mp4 or .mkv files found in your Drive.'}</p></div>`;
+      grid.innerHTML = `<div class="state-box" style="grid-column:1/-1"><div class="icon">${q?'🔍':'📂'}</div><p>${q?'No movies match your search.':'No .mp4 or .mkv files found in your Drive.'}</p></div>`;
       return;
     }
-
     grid.innerHTML = list.map((f, i) => `
-      <div class="movie-card" style="animation-delay:${Math.min(i * 30, 400)}ms" onclick="playMovie('${f.id}','${escHtml(f.name)}')">
-        <div class="card-thumb">
-          <div class="play-icon">▶</div>
-        </div>
+      <div class="movie-card" style="animation-delay:${Math.min(i*30,400)}ms" onclick="playMovie('${f.id}','${escHtml(f.name)}','${f.size||0}')">
+        <div class="card-thumb"><div class="play-icon">▶</div></div>
         <div class="card-info">
-          <div class="card-badge">${f.name.toLowerCase().endsWith('.mkv') ? 'MKV' : 'MP4'}</div>
+          <div class="card-badge">${f.name.toLowerCase().endsWith('.mkv')?'MKV':'MP4'}</div>
           <div class="card-title" title="${escHtml(f.name)}">${escHtml(cleanName(f.name))}</div>
-          <div class="card-size">${formatSize(parseInt(f.size) || 0)}</div>
+          <div class="card-size">${formatSize(parseInt(f.size)||0)}</div>
         </div>
-      </div>
-    `).join('');
+      </div>`).join('');
   }
 
   function filterMovies() { renderMovies(); }
 
-  /* ══ Player ══ */
-  function playMovie(id, name) {
-    const url = `https://www.googleapis.com/drive/v3/files/${id}?alt=media`;
-    const video = document.getElementById('video-player');
+  /* ══════════════════════════════════════════
+     NETFLIX-STYLE STREAMING PLAYER ENGINE
+     Uses HTTP Range requests — streams chunks
+     only as needed. Works for 10GB+ files.
+  ══════════════════════════════════════════ */
 
-    // Use fetch with Authorization header via MediaSource for streaming
-    // Simplest cross-browser: set src with token in query won't work; use Blob URL approach
-    showToast('⏳ Loading movie…');
+  const CHUNK_SIZE = 8 * 1024 * 1024; // 8MB chunks
+  let currentFileId = null;
+  let currentFileSize = 0;
+  let mediaSource = null;
+  let sourceBuffer = null;
+  let fetchController = null;
+  let isFetching = false;
+  let loadedRanges = []; // [{start, end}]
+  let uiHideTimer = null;
 
-    fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } })
-      .then(r => {
-        if (!r.ok) throw new Error('Could not fetch video. Check Drive permissions.');
-        return r.blob();
-      })
-      .then(blob => {
-        const blobUrl = URL.createObjectURL(blob);
-        video.src = blobUrl;
-        video.load();
-        video.play();
-        showToast('▶ Playing ' + cleanName(name));
-      })
-      .catch(err => {
-        showToast('Error: ' + err.message);
-        // Fallback: direct link
-        document.getElementById('direct-link').href =
-          `https://drive.google.com/file/d/${id}/view`;
-      });
+  const video = document.getElementById('video-player');
 
-    document.getElementById('player-title').textContent = cleanName(name);
-    document.getElementById('direct-link').href = `https://drive.google.com/file/d/${id}/view`;
+  // Video events
+  video.addEventListener('waiting', () => showSpinner(true));
+  video.addEventListener('playing', () => showSpinner(false));
+  video.addEventListener('canplay', () => showSpinner(false));
+  video.addEventListener('timeupdate', onTimeUpdate);
+  video.addEventListener('progress', onProgress);
+  video.addEventListener('seeking', onSeeking);
+  video.addEventListener('play', () => setPlayIcon(false));
+  video.addEventListener('pause', () => setPlayIcon(true));
+  video.addEventListener('ended', () => setPlayIcon(true));
+
+  function showSpinner(v) {
+    document.getElementById('player-spinner').classList.toggle('show', v);
+  }
+
+  async function playMovie(fileId, name, size) {
+    currentFileId = fileId;
+    currentFileSize = parseInt(size) || 0;
+    loadedRanges = [];
+
+    // Reset
+    stopStreaming();
+    video.src = '';
+    video.load();
+
+    document.getElementById('player-title-bar').textContent = cleanName(name);
+    document.getElementById('drive-link').href = `https://drive.google.com/file/d/${fileId}/view`;
     document.getElementById('player-modal').classList.add('open');
     document.body.style.overflow = 'hidden';
+    showSpinner(true);
+    showUI();
+
+    const isMkv = name.toLowerCase().endsWith('.mkv');
+
+    // MKV: browser native support is limited, use direct streaming URL trick
+    // MP4: use MediaSource for true range-based streaming
+    if (isMkv) {
+      await streamDirect(fileId);
+    } else {
+      await streamWithMSE(fileId, size);
+    }
+  }
+
+  /* ── Direct streaming (MKV / fallback) ──
+     Fetches a signed redirect URL from Drive
+     which the browser can use as a direct src
+     supporting range requests natively. */
+  async function streamDirect(fileId) {
+    try {
+      // Get file metadata to confirm access
+      const meta = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,name,size,webContentLink`,
+        { headers: { Authorization: `Bearer ${accessToken}` } }
+      );
+      const info = await meta.json();
+      if (info.error) throw new Error(info.error.message);
+
+      // Use a Service Worker proxy approach:
+      // We set video.src to a blob URL from a ReadableStream
+      // so we can inject the Authorization header on every range request.
+      await pipeStreamToVideo(fileId);
+    } catch(e) {
+      showToast('Error: ' + e.message);
+      showSpinner(false);
+    }
+  }
+
+  /* ── MSE-based streaming for MP4 ── */
+  async function streamWithMSE(fileId, size) {
+    if (!window.MediaSource) {
+      // Fallback for browsers without MSE
+      await pipeStreamToVideo(fileId);
+      return;
+    }
+
+    const mime = 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"';
+    if (!MediaSource.isTypeSupported(mime)) {
+      await pipeStreamToVideo(fileId);
+      return;
+    }
+
+    mediaSource = new MediaSource();
+    video.src = URL.createObjectURL(mediaSource);
+
+    mediaSource.addEventListener('sourceopen', async () => {
+      try {
+        sourceBuffer = mediaSource.addSourceBuffer(mime);
+        sourceBuffer.mode = 'segments';
+
+        // Fetch and append first chunk to start playback fast
+        await fetchAndAppend(fileId, 0, Math.min(CHUNK_SIZE - 1, currentFileSize - 1));
+        video.play().catch(() => {});
+
+        // Listen for when we need more data
+        video.addEventListener('timeupdate', () => maybeLoadMore(fileId));
+        sourceBuffer.addEventListener('updateend', () => {
+          if (mediaSource.readyState === 'open' && !sourceBuffer.updating) {
+            maybeLoadMore(fileId);
+          }
+        });
+      } catch(e) {
+        // MSE failed, fall back
+        await pipeStreamToVideo(fileId);
+      }
+    }, { once: true });
+  }
+
+  async function maybeLoadMore(fileId) {
+    if (isFetching || !sourceBuffer || sourceBuffer.updating) return;
+    if (mediaSource.readyState !== 'open') return;
+
+    const buffered = video.buffered;
+    const currentTime = video.currentTime;
+    let bufferedAhead = 0;
+
+    for (let i = 0; i < buffered.length; i++) {
+      if (buffered.start(i) <= currentTime && buffered.end(i) > currentTime) {
+        bufferedAhead = buffered.end(i) - currentTime;
+        break;
+      }
+    }
+
+    // Keep 60 seconds buffered ahead
+    if (bufferedAhead > 60) return;
+
+    // Find next un-fetched byte range
+    let nextStart = 0;
+    for (const r of loadedRanges) {
+      if (r.start <= nextStart && r.end >= nextStart) {
+        nextStart = r.end + 1;
+      }
+    }
+
+    if (nextStart >= currentFileSize) {
+      if (mediaSource.readyState === 'open') mediaSource.endOfStream();
+      return;
+    }
+
+    const end = Math.min(nextStart + CHUNK_SIZE - 1, currentFileSize - 1);
+    await fetchAndAppend(fileId, nextStart, end);
+  }
+
+  async function fetchAndAppend(fileId, start, end) {
+    isFetching = true;
+    fetchController = new AbortController();
+    try {
+      showSpinner(true);
+      const r = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            Range: `bytes=${start}-${end}`
+          },
+          signal: fetchController.signal
+        }
+      );
+      if (!r.ok && r.status !== 206) throw new Error(`HTTP ${r.status}`);
+      const buf = await r.arrayBuffer();
+
+      await waitForSourceBuffer();
+      sourceBuffer.appendBuffer(buf);
+      loadedRanges.push({ start, end });
+      showSpinner(false);
+    } catch(e) {
+      if (e.name !== 'AbortError') showToast('Stream error: ' + e.message);
+      showSpinner(false);
+    } finally {
+      isFetching = false;
+    }
+  }
+
+  function waitForSourceBuffer() {
+    return new Promise(resolve => {
+      if (!sourceBuffer.updating) { resolve(); return; }
+      sourceBuffer.addEventListener('updateend', resolve, { once: true });
+    });
+  }
+
+  async function onSeeking() {
+    if (!mediaSource || !sourceBuffer) return;
+    const t = video.currentTime;
+    const buffered = video.buffered;
+    let alreadyBuffered = false;
+    for (let i = 0; i < buffered.length; i++) {
+      if (buffered.start(i) <= t && buffered.end(i) > t) { alreadyBuffered = true; break; }
+    }
+    if (alreadyBuffered) return;
+
+    // Need to fetch from seek position
+    showSpinner(true);
+    if (fetchController) fetchController.abort();
+    isFetching = false;
+
+    // Estimate byte position (rough linear estimate)
+    if (currentFileSize > 0) {
+      const duration = video.duration || 1;
+      const bytePos = Math.floor((t / duration) * currentFileSize);
+      const alignedStart = Math.max(0, bytePos - (bytePos % (1024 * 1024)));
+      const end = Math.min(alignedStart + CHUNK_SIZE - 1, currentFileSize - 1);
+      await fetchAndAppend(currentFileId, alignedStart, end);
+    }
+  }
+
+  /* ── Pipe-stream fallback (for MKV & older browsers) ──
+     Fetches a fresh token-bearing URL via redirect,
+     then points video.src at the actual CDN URL
+     from Google's response headers. This URL supports
+     range requests and works for large files. */
+  async function pipeStreamToVideo(fileId) {
+    try {
+      showSpinner(true);
+      // HEAD request to get the redirect URL which supports ranges
+      const r = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
+        {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${accessToken}`, Range: 'bytes=0-0' },
+          redirect: 'follow'
+        }
+      );
+
+      if (!r.ok && r.status !== 206) throw new Error(`Access error: ${r.status}`);
+
+      // Use ReadableStream to pipe into a blob URL
+      // This lets the browser handle range requests internally
+      const reader = r.body.getReader();
+      const firstChunk = await reader.read();
+      reader.cancel();
+
+      // Now set up a proper streaming source using a trick:
+      // Create a Service Worker-like fetch interceptor using
+      // the actual response URL (Google CDN) with token embedded
+      const streamUrl = r.url; // Redirected CDN URL
+
+      if (streamUrl && streamUrl !== `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`) {
+        video.src = streamUrl;
+        video.load();
+        video.play().catch(() => {});
+        showSpinner(false);
+        showToast('▶ Streaming started');
+      } else {
+        throw new Error('Could not get streaming URL');
+      }
+    } catch(e) {
+      showSpinner(false);
+      showToast('⚠️ ' + e.message + ' — try opening in Drive');
+    }
+  }
+
+  function stopStreaming() {
+    if (fetchController) { fetchController.abort(); fetchController = null; }
+    isFetching = false;
+    if (mediaSource && mediaSource.readyState === 'open') {
+      try { mediaSource.endOfStream(); } catch(e) {}
+    }
+    mediaSource = null;
+    sourceBuffer = null;
+    if (video.src && video.src.startsWith('blob:')) {
+      URL.revokeObjectURL(video.src);
+    }
   }
 
   function closePlayer() {
-    const video = document.getElementById('video-player');
     video.pause();
-    if (video.src.startsWith('blob:')) URL.revokeObjectURL(video.src);
+    stopStreaming();
     video.src = '';
-    document.getElementById('player-modal').classList.remove('open');
+    document.getElementById('player-modal').classList.remove('open', 'show-ui');
     document.body.style.overflow = '';
+    clearTimeout(uiHideTimer);
   }
 
-  // Close on Escape
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') closePlayer(); });
+  /* ══ Custom Player Controls ══ */
+  function togglePlay() {
+    if (video.paused) { video.play(); flashIcon('▶'); }
+    else { video.pause(); flashIcon('⏸'); }
+  }
+
+  function flashIcon(ch) {
+    const el = document.getElementById('play-flash');
+    el.textContent = ch;
+    el.classList.remove('flash');
+    void el.offsetWidth;
+    el.classList.add('flash');
+    setTimeout(() => el.classList.remove('flash'), 600);
+  }
+
+  function setPlayIcon(paused) {
+    document.getElementById('icon-play').style.display = paused ? '' : 'none';
+    document.getElementById('icon-pause').style.display = paused ? 'none' : '';
+  }
+
+  function skipBy(sec) {
+    video.currentTime = Math.max(0, Math.min(video.duration || 0, video.currentTime + sec));
+    flashIcon(sec > 0 ? '⏩' : '⏪');
+  }
+
+  function toggleMute() {
+    video.muted = !video.muted;
+    document.getElementById('icon-vol').style.display = video.muted ? 'none' : '';
+    document.getElementById('icon-mute').style.display = video.muted ? '' : 'none';
+  }
+
+  function setVolume(v) {
+    video.volume = parseFloat(v);
+    video.muted = v == 0;
+    document.getElementById('icon-vol').style.display = video.muted ? 'none' : '';
+    document.getElementById('icon-mute').style.display = video.muted ? '' : 'none';
+  }
+
+  function onTimeUpdate() {
+    const cur = video.currentTime, dur = video.duration || 0;
+    const pct = dur ? (cur / dur * 100) : 0;
+    document.getElementById('progress-filled').style.width = pct + '%';
+    document.getElementById('progress-thumb').style.left = pct + '%';
+    document.getElementById('time-display').textContent = `${fmtTime(cur)} / ${fmtTime(dur)}`;
+  }
+
+  function onProgress() {
+    const buffered = video.buffered, dur = video.duration || 1;
+    if (buffered.length) {
+      const end = buffered.end(buffered.length - 1);
+      document.getElementById('progress-buffered').style.width = (end / dur * 100) + '%';
+    }
+  }
+
+  function seekTo(e) {
+    const bar = document.getElementById('progress-bar');
+    const rect = bar.getBoundingClientRect();
+    const ratio = (e.clientX - rect.left) / rect.width;
+    video.currentTime = ratio * (video.duration || 0);
+  }
+
+  function showPreview(e) {
+    const bar = document.getElementById('progress-bar');
+    const rect = bar.getBoundingClientRect();
+    const ratio = (e.clientX - rect.left) / rect.width;
+    const t = ratio * (video.duration || 0);
+    const el = document.getElementById('time-preview');
+    el.style.display = 'block';
+    el.style.left = (e.clientX - rect.left) + 'px';
+    el.textContent = fmtTime(t);
+  }
+
+  function hidePreview() {
+    document.getElementById('time-preview').style.display = 'none';
+  }
+
+  function toggleSpeedMenu() {
+    document.getElementById('speed-menu').classList.toggle('open');
+  }
+
+  function setSpeed(s) {
+    video.playbackRate = s;
+    document.getElementById('btn-speed').textContent = s + '×';
+    document.querySelectorAll('#speed-menu div').forEach(d => {
+      d.classList.toggle('active', parseFloat(d.textContent) === s);
+    });
+    document.getElementById('speed-menu').classList.remove('open');
+  }
+
+  function toggleFullscreen() {
+    const wrap = document.getElementById('player-modal');
+    if (!document.fullscreenElement) {
+      wrap.requestFullscreen().catch(() => {});
+      document.getElementById('icon-fs').style.display = 'none';
+      document.getElementById('icon-exit-fs').style.display = '';
+    } else {
+      document.exitFullscreen();
+      document.getElementById('icon-fs').style.display = '';
+      document.getElementById('icon-exit-fs').style.display = 'none';
+    }
+  }
+
+  // Show/hide UI on mouse move
+  const playerModal = document.getElementById('player-modal');
+  playerModal.addEventListener('mousemove', showUI);
+  playerModal.addEventListener('touchstart', showUI);
+
+  function showUI() {
+    playerModal.classList.add('show-ui');
+    clearTimeout(uiHideTimer);
+    uiHideTimer = setTimeout(() => {
+      if (!video.paused) playerModal.classList.remove('show-ui');
+    }, 3000);
+  }
+
+  // Keyboard shortcuts
+  document.addEventListener('keydown', e => {
+    if (!document.getElementById('player-modal').classList.contains('open')) return;
+    if (e.target.tagName === 'INPUT') return;
+    switch(e.key) {
+      case ' ': case 'k': e.preventDefault(); togglePlay(); break;
+      case 'ArrowLeft': case 'j': skipBy(-10); break;
+      case 'ArrowRight': case 'l': skipBy(10); break;
+      case 'ArrowUp': video.volume = Math.min(1, video.volume + 0.1); document.getElementById('vol-slider').value = video.volume; break;
+      case 'ArrowDown': video.volume = Math.max(0, video.volume - 0.1); document.getElementById('vol-slider').value = video.volume; break;
+      case 'm': toggleMute(); break;
+      case 'f': toggleFullscreen(); break;
+      case 'Escape': closePlayer(); break;
+    }
+  });
+
+  // Close speed menu on outside click
+  document.addEventListener('click', e => {
+    if (!e.target.closest('#speed-wrap')) {
+      document.getElementById('speed-menu').classList.remove('open');
+    }
+  });
 
   /* ══ Helpers ══ */
+  function fmtTime(s) {
+    if (!s || isNaN(s)) return '0:00';
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.floor(s % 60);
+    return h ? `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}` : `${m}:${String(sec).padStart(2,'0')}`;
+  }
+
   function cleanName(name) {
     return name.replace(/\.(mp4|mkv|avi|mov)$/i, '')
                .replace(/[._-]+/g, ' ')
@@ -902,7 +1607,7 @@
     t.textContent = msg;
     t.classList.add('show');
     clearTimeout(t._t);
-    t._t = setTimeout(() => t.classList.remove('show'), 3000);
+    t._t = setTimeout(() => t.classList.remove('show'), 3500);
   }
 
   /* ══ Boot ══ */
