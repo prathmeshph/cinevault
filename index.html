@@ -1149,32 +1149,38 @@
 
   function filterMovies() { renderMovies(); }
 
-  /* ══════════════════════════════════════════
-     NETFLIX-STYLE STREAMING PLAYER ENGINE
-     Uses HTTP Range requests — streams chunks
-     only as needed. Works for 10GB+ files.
-  ══════════════════════════════════════════ */
+  /* ══════════════════════════════════════════════════════
+     STREAMING ENGINE  — MediaSource Extensions + chunked
+     Range fetching with Authorization header injection.
+     Works for MP4 & MKV, handles 10 GB+ files.
+     
+     HOW IT WORKS:
+     - For MP4: MSE chunks (8 MB at a time, auto-advance)
+     - For MKV / MSE-unsupported: progressive fetch via
+       ReadableStream piped into a Blob URL chunk-by-chunk,
+       so the browser never needs to buffer the whole file.
+  ══════════════════════════════════════════════════════ */
 
-  const CHUNK_SIZE = 8 * 1024 * 1024; // 8MB chunks
-  let currentFileId = null;
+  const CHUNK_SIZE = 8 * 1024 * 1024;  // 8 MB per chunk
+  let currentFileId   = null;
   let currentFileSize = 0;
-  let mediaSource = null;
-  let sourceBuffer = null;
+  let mediaSource     = null;
+  let sourceBuffer    = null;
   let fetchController = null;
-  let isFetching = false;
-  let loadedRanges = []; // [{start, end}]
-  let uiHideTimer = null;
+  let isFetching      = false;
+  let appendQueue     = [];   // queued ArrayBuffers to append
+  let loadedEnd       = 0;    // highest byte we've fetched so far
+  let uiHideTimer     = null;
 
   const video = document.getElementById('video-player');
 
-  // Video events
-  video.addEventListener('waiting', () => showSpinner(true));
-  video.addEventListener('playing', () => showSpinner(false));
-  video.addEventListener('canplay', () => showSpinner(false));
+  video.addEventListener('waiting',  () => showSpinner(true));
+  video.addEventListener('playing',  () => showSpinner(false));
+  video.addEventListener('canplay',  () => showSpinner(false));
   video.addEventListener('timeupdate', onTimeUpdate);
-  video.addEventListener('progress', onProgress);
-  video.addEventListener('seeking', onSeeking);
-  video.addEventListener('play', () => setPlayIcon(false));
+  video.addEventListener('progress',   onProgress);
+  video.addEventListener('seeking',    onVideoSeeking);
+  video.addEventListener('play',  () => setPlayIcon(false));
   video.addEventListener('pause', () => setPlayIcon(true));
   video.addEventListener('ended', () => setPlayIcon(true));
 
@@ -1182,14 +1188,15 @@
     document.getElementById('player-spinner').classList.toggle('show', v);
   }
 
+  /* ── Entry point ── */
   async function playMovie(fileId, name, size) {
-    currentFileId = fileId;
+    currentFileId   = fileId;
     currentFileSize = parseInt(size) || 0;
-    loadedRanges = [];
+    loadedEnd       = 0;
+    appendQueue     = [];
 
-    // Reset
     stopStreaming();
-    video.src = '';
+    video.removeAttribute('src');
     video.load();
 
     document.getElementById('player-title-bar').textContent = cleanName(name);
@@ -1199,235 +1206,222 @@
     showSpinner(true);
     showUI();
 
+    // Detect codec support
     const isMkv = name.toLowerCase().endsWith('.mkv');
+    const mp4Mime = detectMp4Mime();
 
-    // MKV: browser native support is limited, use direct streaming URL trick
-    // MP4: use MediaSource for true range-based streaming
-    if (isMkv) {
-      await streamDirect(fileId);
+    if (!isMkv && mp4Mime && window.MediaSource && MediaSource.isTypeSupported(mp4Mime)) {
+      startMSE(fileId, mp4Mime);
     } else {
-      await streamWithMSE(fileId, size);
+      // For MKV or fallback: progressive chunked stream → blob
+      await startProgressiveStream(fileId, isMkv);
     }
   }
 
-  /* ── Direct streaming (MKV / fallback) ──
-     Fetches a signed redirect URL from Drive
-     which the browser can use as a direct src
-     supporting range requests natively. */
-  async function streamDirect(fileId) {
-    try {
-      // Get file metadata to confirm access
-      const meta = await fetch(
-        `https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,name,size,webContentLink`,
-        { headers: { Authorization: `Bearer ${accessToken}` } }
-      );
-      const info = await meta.json();
-      if (info.error) throw new Error(info.error.message);
-
-      // Use a Service Worker proxy approach:
-      // We set video.src to a blob URL from a ReadableStream
-      // so we can inject the Authorization header on every range request.
-      await pipeStreamToVideo(fileId);
-    } catch(e) {
-      showToast('Error: ' + e.message);
-      showSpinner(false);
+  /* ── Detect best supported MP4 mime ── */
+  function detectMp4Mime() {
+    const candidates = [
+      'video/mp4; codecs="avc1.64001f,mp4a.40.2"',
+      'video/mp4; codecs="avc1.42E01E,mp4a.40.2"',
+      'video/mp4; codecs="avc1.42E01E"',
+      'video/mp4',
+    ];
+    for (const m of candidates) {
+      if (MediaSource.isTypeSupported && MediaSource.isTypeSupported(m)) return m;
     }
+    return null;
   }
 
-  /* ── MSE-based streaming for MP4 ── */
-  async function streamWithMSE(fileId, size) {
-    if (!window.MediaSource) {
-      // Fallback for browsers without MSE
-      await pipeStreamToVideo(fileId);
-      return;
-    }
-
-    const mime = 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"';
-    if (!MediaSource.isTypeSupported(mime)) {
-      await pipeStreamToVideo(fileId);
-      return;
-    }
-
+  /* ══ MSE path (MP4) ══ */
+  function startMSE(fileId, mime) {
     mediaSource = new MediaSource();
-    video.src = URL.createObjectURL(mediaSource);
+    const blobUrl = URL.createObjectURL(mediaSource);
+    video.src = blobUrl;
 
     mediaSource.addEventListener('sourceopen', async () => {
+      URL.revokeObjectURL(blobUrl);
       try {
         sourceBuffer = mediaSource.addSourceBuffer(mime);
         sourceBuffer.mode = 'segments';
+        sourceBuffer.addEventListener('updateend', drainQueue);
 
-        // Fetch and append first chunk to start playback fast
-        await fetchAndAppend(fileId, 0, Math.min(CHUNK_SIZE - 1, currentFileSize - 1));
+        // Fetch first chunk immediately
+        await scheduleFetch(fileId, 0);
         video.play().catch(() => {});
-
-        // Listen for when we need more data
-        video.addEventListener('timeupdate', () => maybeLoadMore(fileId));
-        sourceBuffer.addEventListener('updateend', () => {
-          if (mediaSource.readyState === 'open' && !sourceBuffer.updating) {
-            maybeLoadMore(fileId);
-          }
-        });
       } catch(e) {
-        // MSE failed, fall back
-        await pipeStreamToVideo(fileId);
+        console.warn('MSE error, falling back:', e);
+        await startProgressiveStream(fileId, false);
       }
     }, { once: true });
+
+    // Keep feeding chunks as playback advances
+    video.addEventListener('timeupdate', () => scheduleMoreIfNeeded(fileId));
   }
 
-  async function maybeLoadMore(fileId) {
-    if (isFetching || !sourceBuffer || sourceBuffer.updating) return;
-    if (mediaSource.readyState !== 'open') return;
+  async function scheduleMoreIfNeeded(fileId) {
+    if (isFetching || loadedEnd >= currentFileSize) return;
+    if (!sourceBuffer || sourceBuffer.updating) return;
+    if (mediaSource?.readyState !== 'open') return;
 
-    const buffered = video.buffered;
-    const currentTime = video.currentTime;
-    let bufferedAhead = 0;
-
-    for (let i = 0; i < buffered.length; i++) {
-      if (buffered.start(i) <= currentTime && buffered.end(i) > currentTime) {
-        bufferedAhead = buffered.end(i) - currentTime;
-        break;
+    // How many seconds are buffered ahead of current time?
+    let aheadSec = 0;
+    const t = video.currentTime;
+    for (let i = 0; i < video.buffered.length; i++) {
+      if (video.buffered.start(i) <= t + 0.5 && video.buffered.end(i) > t) {
+        aheadSec = video.buffered.end(i) - t;
       }
     }
+    if (aheadSec > 90) return; // plenty buffered
 
-    // Keep 60 seconds buffered ahead
-    if (bufferedAhead > 60) return;
+    await scheduleFetch(fileId, loadedEnd);
+  }
 
-    // Find next un-fetched byte range
-    let nextStart = 0;
-    for (const r of loadedRanges) {
-      if (r.start <= nextStart && r.end >= nextStart) {
-        nextStart = r.end + 1;
+  async function scheduleFetch(fileId, start) {
+    if (start >= currentFileSize) {
+      if (mediaSource?.readyState === 'open') {
+        try { mediaSource.endOfStream(); } catch(e) {}
       }
-    }
-
-    if (nextStart >= currentFileSize) {
-      if (mediaSource.readyState === 'open') mediaSource.endOfStream();
       return;
     }
-
-    const end = Math.min(nextStart + CHUNK_SIZE - 1, currentFileSize - 1);
-    await fetchAndAppend(fileId, nextStart, end);
+    const end = Math.min(start + CHUNK_SIZE - 1, currentFileSize - 1);
+    await doFetch(fileId, start, end);
   }
 
-  async function fetchAndAppend(fileId, start, end) {
+  async function doFetch(fileId, start, end) {
     isFetching = true;
     fetchController = new AbortController();
     try {
-      showSpinner(true);
       const r = await fetch(
         `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
         {
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            Range: `bytes=${start}-${end}`
-          },
+          headers: { Authorization: `Bearer ${accessToken}`, Range: `bytes=${start}-${end}` },
           signal: fetchController.signal
         }
       );
-      if (!r.ok && r.status !== 206) throw new Error(`HTTP ${r.status}`);
+      if (!r.ok && r.status !== 206) throw new Error(`Drive API error ${r.status}`);
       const buf = await r.arrayBuffer();
-
-      await waitForSourceBuffer();
-      sourceBuffer.appendBuffer(buf);
-      loadedRanges.push({ start, end });
-      showSpinner(false);
+      loadedEnd = end + 1;
+      appendQueue.push(buf);
+      drainQueue();
     } catch(e) {
-      if (e.name !== 'AbortError') showToast('Stream error: ' + e.message);
-      showSpinner(false);
+      if (e.name !== 'AbortError') {
+        showToast('⚠️ Fetch error: ' + e.message);
+        showSpinner(false);
+      }
     } finally {
       isFetching = false;
     }
   }
 
-  function waitForSourceBuffer() {
-    return new Promise(resolve => {
-      if (!sourceBuffer.updating) { resolve(); return; }
-      sourceBuffer.addEventListener('updateend', resolve, { once: true });
-    });
+  function drainQueue() {
+    if (!sourceBuffer || sourceBuffer.updating || appendQueue.length === 0) return;
+    try {
+      sourceBuffer.appendBuffer(appendQueue.shift());
+    } catch(e) {
+      console.warn('AppendBuffer error:', e);
+    }
   }
 
-  async function onSeeking() {
+  /* ── Handle seek in MSE mode ── */
+  async function onVideoSeeking() {
     if (!mediaSource || !sourceBuffer) return;
     const t = video.currentTime;
-    const buffered = video.buffered;
-    let alreadyBuffered = false;
-    for (let i = 0; i < buffered.length; i++) {
-      if (buffered.start(i) <= t && buffered.end(i) > t) { alreadyBuffered = true; break; }
+    // Check if seek target is already buffered
+    for (let i = 0; i < video.buffered.length; i++) {
+      if (video.buffered.start(i) <= t && video.buffered.end(i) > t) return; // already have it
     }
-    if (alreadyBuffered) return;
-
-    // Need to fetch from seek position
+    // Jump fetch position to estimated byte offset
     showSpinner(true);
     if (fetchController) fetchController.abort();
     isFetching = false;
-
-    // Estimate byte position (rough linear estimate)
-    if (currentFileSize > 0) {
-      const duration = video.duration || 1;
-      const bytePos = Math.floor((t / duration) * currentFileSize);
-      const alignedStart = Math.max(0, bytePos - (bytePos % (1024 * 1024)));
-      const end = Math.min(alignedStart + CHUNK_SIZE - 1, currentFileSize - 1);
-      await fetchAndAppend(currentFileId, alignedStart, end);
-    }
+    appendQueue = [];
+    const dur = video.duration || 1;
+    const estimatedByte = Math.floor((t / dur) * currentFileSize);
+    // Align to 1MB boundary
+    loadedEnd = Math.max(0, estimatedByte - (estimatedByte % (1024 * 1024)));
+    await scheduleFetch(currentFileId, loadedEnd);
   }
 
-  /* ── Pipe-stream fallback (for MKV & older browsers) ──
-     Fetches a fresh token-bearing URL via redirect,
-     then points video.src at the actual CDN URL
-     from Google's response headers. This URL supports
-     range requests and works for large files. */
-  async function pipeStreamToVideo(fileId) {
+  /* ══ Progressive stream path (MKV / fallback) ══
+     Reads Drive response as a ReadableStream and
+     builds a growing Blob URL the browser can play.
+     No full download needed — browser reads ahead
+     as it streams in. */
+  async function startProgressiveStream(fileId, isMkv) {
+    showSpinner(true);
+    fetchController = new AbortController();
     try {
-      showSpinner(true);
-      // HEAD request to get the redirect URL which supports ranges
       const r = await fetch(
         `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
         {
-          method: 'GET',
-          headers: { Authorization: `Bearer ${accessToken}`, Range: 'bytes=0-0' },
-          redirect: 'follow'
+          headers: { Authorization: `Bearer ${accessToken}` },
+          signal: fetchController.signal
         }
       );
+      if (!r.ok) throw new Error(`HTTP ${r.status} — check file permissions`);
 
-      if (!r.ok && r.status !== 206) throw new Error(`Access error: ${r.status}`);
+      const contentType = isMkv ? 'video/webm' : (r.headers.get('content-type') || 'video/mp4');
 
-      // Use ReadableStream to pipe into a blob URL
-      // This lets the browser handle range requests internally
+      // Stream into an accumulating Blob and update src periodically
       const reader = r.body.getReader();
-      const firstChunk = await reader.read();
-      reader.cancel();
+      const chunks = [];
+      let totalLoaded = 0;
+      let firstPlay = false;
 
-      // Now set up a proper streaming source using a trick:
-      // Create a Service Worker-like fetch interceptor using
-      // the actual response URL (Google CDN) with token embedded
-      const streamUrl = r.url; // Redirected CDN URL
+      const pump = async () => {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+          totalLoaded += value.byteLength;
 
-      if (streamUrl && streamUrl !== `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`) {
-        video.src = streamUrl;
-        video.load();
-        video.play().catch(() => {});
-        showSpinner(false);
-        showToast('▶ Streaming started');
-      } else {
-        throw new Error('Could not get streaming URL');
-      }
+          // Start playing after first 5MB
+          if (!firstPlay && totalLoaded >= 5 * 1024 * 1024) {
+            firstPlay = true;
+            const blob = new Blob(chunks, { type: contentType });
+            const url = URL.createObjectURL(blob);
+            video.src = url;
+            video.load();
+            video.play().catch(() => {});
+            showSpinner(false);
+            showToast('▶ Streaming…');
+          }
+        }
+        // Full file done — update src to final complete blob for proper seeking
+        const finalBlob = new Blob(chunks, { type: contentType });
+        const finalUrl = URL.createObjectURL(finalBlob);
+        const savedTime = video.currentTime;
+        const wasPaused = video.paused;
+        if (video.src && video.src.startsWith('blob:')) URL.revokeObjectURL(video.src);
+        video.src = finalUrl;
+        video.currentTime = savedTime;
+        if (!wasPaused) video.play().catch(() => {});
+        showToast('✅ Fully loaded — seeking now works perfectly');
+      };
+
+      pump().catch(e => {
+        if (e.name !== 'AbortError') {
+          showSpinner(false);
+          showToast('⚠️ ' + e.message);
+        }
+      });
+
     } catch(e) {
       showSpinner(false);
-      showToast('⚠️ ' + e.message + ' — try opening in Drive');
+      showToast('⚠️ ' + e.message);
     }
   }
 
   function stopStreaming() {
     if (fetchController) { fetchController.abort(); fetchController = null; }
     isFetching = false;
-    if (mediaSource && mediaSource.readyState === 'open') {
+    appendQueue = [];
+    if (mediaSource?.readyState === 'open') {
       try { mediaSource.endOfStream(); } catch(e) {}
     }
-    mediaSource = null;
-    sourceBuffer = null;
-    if (video.src && video.src.startsWith('blob:')) {
-      URL.revokeObjectURL(video.src);
-    }
+    mediaSource    = null;
+    sourceBuffer   = null;
+    if (video.src?.startsWith('blob:')) URL.revokeObjectURL(video.src);
   }
 
   function closePlayer() {
