@@ -1150,33 +1150,41 @@
   function filterMovies() { renderMovies(); }
 
   /* ══════════════════════════════════════════════════════
-     STREAMING ENGINE  — MediaSource Extensions + chunked
-     Range fetching with Authorization header injection.
-     Works for MP4 & MKV, handles 10 GB+ files.
-     
-     HOW IT WORKS:
-     - For MP4: MSE chunks (8 MB at a time, auto-advance)
-     - For MKV / MSE-unsupported: progressive fetch via
-       ReadableStream piped into a Blob URL chunk-by-chunk,
-       so the browser never needs to buffer the whole file.
+     STREAMING ENGINE
+
+     STRATEGY:
+     ┌─────────────────────────────────────────────────┐
+     │ MP4 + H.264  →  MSE chunked range streaming     │
+     │ MKV / H.265  →  Google Drive iframe embed        │
+     │               (Drive handles codec decoding)     │
+     └─────────────────────────────────────────────────┘
+
+     WHY:
+     Chrome does NOT support H.265/HEVC natively.
+     Your file is MKV+H265 (2160p). The only reliable
+     way to play H.265 in a browser is via Google Drive's
+     own player (which uses platform codecs / WASM).
+     We embed it in a full-screen iframe and layer our
+     own back button + title on top.
   ══════════════════════════════════════════════════════ */
 
-  const CHUNK_SIZE = 8 * 1024 * 1024;  // 8 MB per chunk
+  const CHUNK_SIZE  = 8 * 1024 * 1024;
   let currentFileId   = null;
   let currentFileSize = 0;
   let mediaSource     = null;
   let sourceBuffer    = null;
   let fetchController = null;
   let isFetching      = false;
-  let appendQueue     = [];   // queued ArrayBuffers to append
-  let loadedEnd       = 0;    // highest byte we've fetched so far
+  let appendQueue     = [];
+  let loadedEnd       = 0;
   let uiHideTimer     = null;
+  let playerMode      = 'native'; // 'native' | 'iframe'
 
   const video = document.getElementById('video-player');
 
-  video.addEventListener('waiting',  () => showSpinner(true));
-  video.addEventListener('playing',  () => showSpinner(false));
-  video.addEventListener('canplay',  () => showSpinner(false));
+  video.addEventListener('waiting',    () => showSpinner(true));
+  video.addEventListener('playing',    () => showSpinner(false));
+  video.addEventListener('canplay',    () => showSpinner(false));
   video.addEventListener('timeupdate', onTimeUpdate);
   video.addEventListener('progress',   onProgress);
   video.addEventListener('seeking',    onVideoSeeking);
@@ -1188,52 +1196,95 @@
     document.getElementById('player-spinner').classList.toggle('show', v);
   }
 
-  /* ── Entry point ── */
+  /* ── Codec detection helper ── */
+  function browserCanPlay(name) {
+    const t = document.createElement('video');
+    // Check H.265
+    if (name.toLowerCase().endsWith('.mkv')) {
+      const h265 = t.canPlayType('video/mp4; codecs="hvc1"') ||
+                   t.canPlayType('video/mp4; codecs="hev1"') ||
+                   t.canPlayType('video/webm; codecs="hev1"');
+      return !!h265;
+    }
+    // MP4 H.264 — universally supported
+    return true;
+  }
+
+  /* ── Main entry point ── */
   async function playMovie(fileId, name, size) {
     currentFileId   = fileId;
     currentFileSize = parseInt(size) || 0;
-    loadedEnd       = 0;
-    appendQueue     = [];
+    loadedEnd = 0; appendQueue = [];
 
     stopStreaming();
-    video.removeAttribute('src');
-    video.load();
 
     document.getElementById('player-title-bar').textContent = cleanName(name);
     document.getElementById('drive-link').href = `https://drive.google.com/file/d/${fileId}/view`;
     document.getElementById('player-modal').classList.add('open');
     document.body.style.overflow = 'hidden';
-    showSpinner(true);
     showUI();
 
-    // Detect codec support
-    const isMkv = name.toLowerCase().endsWith('.mkv');
-    const mp4Mime = detectMp4Mime();
+    const canPlayNative = browserCanPlay(name);
 
-    if (!isMkv && mp4Mime && window.MediaSource && MediaSource.isTypeSupported(mp4Mime)) {
-      startMSE(fileId, mp4Mime);
+    if (canPlayNative) {
+      // Native <video> + MSE path
+      playerMode = 'native';
+      showNativePlayer();
+      video.removeAttribute('src'); video.load();
+      showSpinner(true);
+      startMSE(fileId);
     } else {
-      // For MKV or fallback: progressive chunked stream → blob
-      await startProgressiveStream(fileId, isMkv);
+      // Drive iframe path (handles H.265, any codec)
+      playerMode = 'iframe';
+      showIframePlayer(fileId);
     }
   }
 
-  /* ── Detect best supported MP4 mime ── */
-  function detectMp4Mime() {
-    const candidates = [
-      'video/mp4; codecs="avc1.64001f,mp4a.40.2"',
-      'video/mp4; codecs="avc1.42E01E,mp4a.40.2"',
-      'video/mp4; codecs="avc1.42E01E"',
-      'video/mp4',
-    ];
-    for (const m of candidates) {
-      if (MediaSource.isTypeSupported && MediaSource.isTypeSupported(m)) return m;
-    }
-    return null;
+  /* ── Show/hide player layers ── */
+  function showNativePlayer() {
+    document.getElementById('video-player').style.display  = 'block';
+    document.getElementById('player-overlay').style.display = 'block';
+    document.getElementById('player-controls').style.display = '';
+    const iframe = document.getElementById('drive-iframe');
+    if (iframe) iframe.style.display = 'none';
   }
 
-  /* ══ MSE path (MP4) ══ */
-  function startMSE(fileId, mime) {
+  function showIframePlayer(fileId) {
+    document.getElementById('video-player').style.display  = 'none';
+    document.getElementById('player-overlay').style.display = 'none';
+    document.getElementById('player-controls').style.display = 'none';
+    showSpinner(false);
+
+    let iframe = document.getElementById('drive-iframe');
+    if (!iframe) {
+      iframe = document.createElement('iframe');
+      iframe.id = 'drive-iframe';
+      iframe.style.cssText = `
+        position:absolute; inset:0; width:100%; height:100%;
+        border:none; z-index:3; background:#000;
+      `;
+      iframe.allow = 'autoplay; fullscreen';
+      iframe.allowFullscreen = true;
+      document.getElementById('player-wrap').appendChild(iframe);
+    }
+    iframe.style.display = 'block';
+    // Use Drive's preview player — supports H.265 via platform/WASM codecs
+    iframe.src = `https://drive.google.com/file/d/${fileId}/preview?rm=minimal`;
+
+    showToast('▶ Opening with Drive player (H.265 / MKV)');
+
+    // Show topbar always in iframe mode
+    document.getElementById('player-modal').classList.add('show-ui');
+  }
+
+  /* ══ MSE chunked streaming (MP4 / H.264) ══ */
+  function startMSE(fileId) {
+    const mime = getBestMime();
+    if (!mime || !window.MediaSource) {
+      showToast('⚠️ MSE not supported — try a Chromium browser');
+      showSpinner(false); return;
+    }
+
     mediaSource = new MediaSource();
     const blobUrl = URL.createObjectURL(mediaSource);
     video.src = blobUrl;
@@ -1244,47 +1295,42 @@
         sourceBuffer = mediaSource.addSourceBuffer(mime);
         sourceBuffer.mode = 'segments';
         sourceBuffer.addEventListener('updateend', drainQueue);
-
-        // Fetch first chunk immediately
-        await scheduleFetch(fileId, 0);
+        await doFetch(fileId, 0, Math.min(CHUNK_SIZE - 1, currentFileSize - 1));
         video.play().catch(() => {});
       } catch(e) {
-        console.warn('MSE error, falling back:', e);
-        await startProgressiveStream(fileId, false);
+        console.warn('MSE sourceopen error:', e.message);
+        showToast('⚠️ Codec error: ' + e.message);
+        showSpinner(false);
       }
     }, { once: true });
 
-    // Keep feeding chunks as playback advances
-    video.addEventListener('timeupdate', () => scheduleMoreIfNeeded(fileId));
+    video.addEventListener('timeupdate', () => feedMoreChunks(fileId));
   }
 
-  async function scheduleMoreIfNeeded(fileId) {
+  function getBestMime() {
+    const mimes = [
+      'video/mp4; codecs="avc1.640028,mp4a.40.2"',
+      'video/mp4; codecs="avc1.64001f,mp4a.40.2"',
+      'video/mp4; codecs="avc1.42E01E,mp4a.40.2"',
+      'video/mp4; codecs="avc1.42E01E"',
+      'video/mp4',
+    ];
+    return mimes.find(m => MediaSource.isTypeSupported(m)) || null;
+  }
+
+  async function feedMoreChunks(fileId) {
     if (isFetching || loadedEnd >= currentFileSize) return;
     if (!sourceBuffer || sourceBuffer.updating) return;
     if (mediaSource?.readyState !== 'open') return;
-
-    // How many seconds are buffered ahead of current time?
-    let aheadSec = 0;
     const t = video.currentTime;
+    let ahead = 0;
     for (let i = 0; i < video.buffered.length; i++) {
-      if (video.buffered.start(i) <= t + 0.5 && video.buffered.end(i) > t) {
-        aheadSec = video.buffered.end(i) - t;
-      }
+      if (video.buffered.start(i) <= t + 1 && video.buffered.end(i) > t)
+        ahead = video.buffered.end(i) - t;
     }
-    if (aheadSec > 90) return; // plenty buffered
-
-    await scheduleFetch(fileId, loadedEnd);
-  }
-
-  async function scheduleFetch(fileId, start) {
-    if (start >= currentFileSize) {
-      if (mediaSource?.readyState === 'open') {
-        try { mediaSource.endOfStream(); } catch(e) {}
-      }
-      return;
-    }
-    const end = Math.min(start + CHUNK_SIZE - 1, currentFileSize - 1);
-    await doFetch(fileId, start, end);
+    if (ahead > 90) return;
+    const end = Math.min(loadedEnd + CHUNK_SIZE - 1, currentFileSize - 1);
+    await doFetch(fileId, loadedEnd, end);
   }
 
   async function doFetch(fileId, start, end) {
@@ -1298,130 +1344,46 @@
           signal: fetchController.signal
         }
       );
-      if (!r.ok && r.status !== 206) throw new Error(`Drive API error ${r.status}`);
+      if (!r.ok && r.status !== 206) throw new Error(`HTTP ${r.status}`);
       const buf = await r.arrayBuffer();
       loadedEnd = end + 1;
       appendQueue.push(buf);
       drainQueue();
+      showSpinner(false);
     } catch(e) {
-      if (e.name !== 'AbortError') {
-        showToast('⚠️ Fetch error: ' + e.message);
-        showSpinner(false);
-      }
-    } finally {
-      isFetching = false;
-    }
+      if (e.name !== 'AbortError') { showToast('Fetch error: ' + e.message); showSpinner(false); }
+    } finally { isFetching = false; }
   }
 
   function drainQueue() {
-    if (!sourceBuffer || sourceBuffer.updating || appendQueue.length === 0) return;
-    try {
-      sourceBuffer.appendBuffer(appendQueue.shift());
-    } catch(e) {
-      console.warn('AppendBuffer error:', e);
-    }
+    if (!sourceBuffer || sourceBuffer.updating || !appendQueue.length) return;
+    try { sourceBuffer.appendBuffer(appendQueue.shift()); } catch(e) {}
   }
 
-  /* ── Handle seek in MSE mode ── */
   async function onVideoSeeking() {
-    if (!mediaSource || !sourceBuffer) return;
+    if (playerMode !== 'native' || !mediaSource || !sourceBuffer) return;
     const t = video.currentTime;
-    // Check if seek target is already buffered
     for (let i = 0; i < video.buffered.length; i++) {
-      if (video.buffered.start(i) <= t && video.buffered.end(i) > t) return; // already have it
+      if (video.buffered.start(i) <= t && video.buffered.end(i) > t) return;
     }
-    // Jump fetch position to estimated byte offset
     showSpinner(true);
     if (fetchController) fetchController.abort();
-    isFetching = false;
-    appendQueue = [];
+    isFetching = false; appendQueue = [];
     const dur = video.duration || 1;
-    const estimatedByte = Math.floor((t / dur) * currentFileSize);
-    // Align to 1MB boundary
-    loadedEnd = Math.max(0, estimatedByte - (estimatedByte % (1024 * 1024)));
-    await scheduleFetch(currentFileId, loadedEnd);
-  }
-
-  /* ══ Progressive stream path (MKV / fallback) ══
-     Reads Drive response as a ReadableStream and
-     builds a growing Blob URL the browser can play.
-     No full download needed — browser reads ahead
-     as it streams in. */
-  async function startProgressiveStream(fileId, isMkv) {
-    showSpinner(true);
-    fetchController = new AbortController();
-    try {
-      const r = await fetch(
-        `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
-        {
-          headers: { Authorization: `Bearer ${accessToken}` },
-          signal: fetchController.signal
-        }
-      );
-      if (!r.ok) throw new Error(`HTTP ${r.status} — check file permissions`);
-
-      const contentType = isMkv ? 'video/webm' : (r.headers.get('content-type') || 'video/mp4');
-
-      // Stream into an accumulating Blob and update src periodically
-      const reader = r.body.getReader();
-      const chunks = [];
-      let totalLoaded = 0;
-      let firstPlay = false;
-
-      const pump = async () => {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          chunks.push(value);
-          totalLoaded += value.byteLength;
-
-          // Start playing after first 5MB
-          if (!firstPlay && totalLoaded >= 5 * 1024 * 1024) {
-            firstPlay = true;
-            const blob = new Blob(chunks, { type: contentType });
-            const url = URL.createObjectURL(blob);
-            video.src = url;
-            video.load();
-            video.play().catch(() => {});
-            showSpinner(false);
-            showToast('▶ Streaming…');
-          }
-        }
-        // Full file done — update src to final complete blob for proper seeking
-        const finalBlob = new Blob(chunks, { type: contentType });
-        const finalUrl = URL.createObjectURL(finalBlob);
-        const savedTime = video.currentTime;
-        const wasPaused = video.paused;
-        if (video.src && video.src.startsWith('blob:')) URL.revokeObjectURL(video.src);
-        video.src = finalUrl;
-        video.currentTime = savedTime;
-        if (!wasPaused) video.play().catch(() => {});
-        showToast('✅ Fully loaded — seeking now works perfectly');
-      };
-
-      pump().catch(e => {
-        if (e.name !== 'AbortError') {
-          showSpinner(false);
-          showToast('⚠️ ' + e.message);
-        }
-      });
-
-    } catch(e) {
-      showSpinner(false);
-      showToast('⚠️ ' + e.message);
-    }
+    const est = Math.floor((t / dur) * currentFileSize);
+    loadedEnd = Math.max(0, est - (est % (1024 * 1024)));
+    const end = Math.min(loadedEnd + CHUNK_SIZE - 1, currentFileSize - 1);
+    await doFetch(currentFileId, loadedEnd, end);
   }
 
   function stopStreaming() {
     if (fetchController) { fetchController.abort(); fetchController = null; }
-    isFetching = false;
-    appendQueue = [];
-    if (mediaSource?.readyState === 'open') {
-      try { mediaSource.endOfStream(); } catch(e) {}
-    }
-    mediaSource    = null;
-    sourceBuffer   = null;
+    isFetching = false; appendQueue = [];
+    if (mediaSource?.readyState === 'open') try { mediaSource.endOfStream(); } catch(e) {}
+    mediaSource = null; sourceBuffer = null;
     if (video.src?.startsWith('blob:')) URL.revokeObjectURL(video.src);
+    const iframe = document.getElementById('drive-iframe');
+    if (iframe) { iframe.src = ''; iframe.style.display = 'none'; }
   }
 
   function closePlayer() {
