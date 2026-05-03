@@ -764,7 +764,7 @@
   /* ══ Drive API ══ */
   async function loadMovies() {
     const grid = document.getElementById('movies-grid');
-    grid.innerHTML = `<div class="state-box" style="grid-column:1/-1"><div class="spinner"></div><p>Scanning your Drive for .mp4 files…</p></div>`;
+    grid.innerHTML = `<div class="state-box" style="grid-column:1/-1"><div class="spinner"></div><p>Scanning your Drive for .mp4 and .mkv files…</p></div>`;
 
     allMovies = [];
     let pageToken = null;
@@ -772,7 +772,7 @@
     try {
       do {
         const params = new URLSearchParams({
-          q: "mimeType='video/mp4' and trashed=false",
+          q: "(mimeType='video/mp4' or mimeType='video/x-matroska' or name contains '.mkv') and trashed=false",
           fields: 'nextPageToken,files(id,name,size,modifiedTime,mimeType)',
           pageSize: 200,
           orderBy: 'name',
@@ -812,7 +812,7 @@
     else list.sort((a, b) => a.name.localeCompare(b.name));
 
     if (!list.length) {
-      grid.innerHTML = `<div class="state-box" style="grid-column:1/-1"><div class="icon">${q ? '🔍' : '📂'}</div><p>${q ? 'No movies match your search.' : 'No .mp4 files found in your Drive.'}</p></div>`;
+      grid.innerHTML = `<div class="state-box" style="grid-column:1/-1"><div class="icon">${q ? '🔍' : '📂'}</div><p>${q ? 'No movies match your search.' : 'No .mp4 or .mkv files found in your Drive.'}</p></div>`;
       return;
     }
 
@@ -822,7 +822,7 @@
           <div class="play-icon">▶</div>
         </div>
         <div class="card-info">
-          <div class="card-badge">MP4</div>
+          <div class="card-badge">${f.name.toLowerCase().endsWith('.mkv') ? 'MKV' : 'MP4'}</div>
           <div class="card-title" title="${escHtml(f.name)}">${escHtml(cleanName(f.name))}</div>
           <div class="card-size">${formatSize(parseInt(f.size) || 0)}</div>
         </div>
