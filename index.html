@@ -1150,240 +1150,90 @@
   function filterMovies() { renderMovies(); }
 
   /* ══════════════════════════════════════════════════════
-     STREAMING ENGINE
+     STREAMING ENGINE — Server-side transcoding via Railway
 
-     STRATEGY:
-     ┌─────────────────────────────────────────────────┐
-     │ MP4 + H.264  →  MSE chunked range streaming     │
-     │ MKV / H.265  →  Google Drive iframe embed        │
-     │               (Drive handles codec decoding)     │
-     └─────────────────────────────────────────────────┘
+     ARCHITECTURE:
+       Browser → Railway Server → Google Drive
+                      ↓ FFmpeg (H.265/MKV → H.264/MP4)
+                 Stream H.264 back → any browser plays it
 
-     WHY:
-     Chrome does NOT support H.265/HEVC natively.
-     Your file is MKV+H265 (2160p). The only reliable
-     way to play H.265 in a browser is via Google Drive's
-     own player (which uses platform codecs / WASM).
-     We embed it in a full-screen iframe and layer our
-     own back button + title on top.
+     The Railway server fetches from Drive with your token,
+     transcodes on-the-fly with FFmpeg, and streams
+     standard H.264/MP4 — works on ANY browser, ANY device.
   ══════════════════════════════════════════════════════ */
 
-  const CHUNK_SIZE  = 8 * 1024 * 1024;
-  let currentFileId   = null;
-  let currentFileSize = 0;
-  let mediaSource     = null;
-  let sourceBuffer    = null;
-  let fetchController = null;
-  let isFetching      = false;
-  let appendQueue     = [];
-  let loadedEnd       = 0;
-  let uiHideTimer     = null;
-  let playerMode      = 'native'; // 'native' | 'iframe'
+  // Set after deploying Railway server
+  let SERVER_URL = localStorage.getItem('cvault_server') || '';
+
+  let uiHideTimer = null;
+  let currentFileId = null;
 
   const video = document.getElementById('video-player');
 
-  video.addEventListener('waiting',    () => showSpinner(true));
-  video.addEventListener('playing',    () => showSpinner(false));
-  video.addEventListener('canplay',    () => showSpinner(false));
+  video.addEventListener('waiting',  () => showSpinner(true));
+  video.addEventListener('playing',  () => showSpinner(false));
+  video.addEventListener('canplay',  () => showSpinner(false));
   video.addEventListener('timeupdate', onTimeUpdate);
   video.addEventListener('progress',   onProgress);
-  video.addEventListener('seeking',    onVideoSeeking);
   video.addEventListener('play',  () => setPlayIcon(false));
   video.addEventListener('pause', () => setPlayIcon(true));
   video.addEventListener('ended', () => setPlayIcon(true));
+  video.addEventListener('error', onVideoError);
 
   function showSpinner(v) {
     document.getElementById('player-spinner').classList.toggle('show', v);
   }
 
-  /* ── Codec detection helper ── */
-  function browserCanPlay(name) {
-    const t = document.createElement('video');
-    // Check H.265
-    if (name.toLowerCase().endsWith('.mkv')) {
-      const h265 = t.canPlayType('video/mp4; codecs="hvc1"') ||
-                   t.canPlayType('video/mp4; codecs="hev1"') ||
-                   t.canPlayType('video/webm; codecs="hev1"');
-      return !!h265;
-    }
-    // MP4 H.264 — universally supported
+  /* ── Server URL prompt ── */
+  function ensureServerUrl() {
+    if (SERVER_URL) return true;
+    const url = prompt(
+      '🚂 Enter your Railway server URL:\n(e.g. https://cinevault-server.up.railway.app)\n\nSee setup instructions to deploy the server first.'
+    );
+    if (!url || !url.startsWith('http')) { showToast('⚠️ No server URL set.'); return false; }
+    SERVER_URL = url.replace(/\/$/, '');
+    localStorage.setItem('cvault_server', SERVER_URL);
+    showToast('✅ Server URL saved!');
     return true;
   }
 
   /* ── Main entry point ── */
   async function playMovie(fileId, name, size) {
-    currentFileId   = fileId;
-    currentFileSize = parseInt(size) || 0;
-    loadedEnd = 0; appendQueue = [];
+    if (!ensureServerUrl()) return;
 
+    currentFileId = fileId;
     stopStreaming();
 
     document.getElementById('player-title-bar').textContent = cleanName(name);
     document.getElementById('drive-link').href = `https://drive.google.com/file/d/${fileId}/view`;
     document.getElementById('player-modal').classList.add('open');
     document.body.style.overflow = 'hidden';
+    showSpinner(true);
     showUI();
 
-    const canPlayNative = browserCanPlay(name);
+    // Server transcodes H.265/MKV → H.264/MP4 on-the-fly
+    const streamUrl = `${SERVER_URL}/stream?fileId=${encodeURIComponent(fileId)}&token=${encodeURIComponent(accessToken)}`;
 
-    if (canPlayNative) {
-      // Native <video> + MSE path
-      playerMode = 'native';
-      showNativePlayer();
-      video.removeAttribute('src'); video.load();
-      showSpinner(true);
-      startMSE(fileId);
-    } else {
-      // Drive iframe path (handles H.265, any codec)
-      playerMode = 'iframe';
-      showIframePlayer(fileId);
-    }
-  }
-
-  /* ── Show/hide player layers ── */
-  function showNativePlayer() {
-    document.getElementById('video-player').style.display  = 'block';
-    document.getElementById('player-overlay').style.display = 'block';
-    document.getElementById('player-controls').style.display = '';
-    const iframe = document.getElementById('drive-iframe');
-    if (iframe) iframe.style.display = 'none';
-  }
-
-  function showIframePlayer(fileId) {
-    document.getElementById('video-player').style.display  = 'none';
-    document.getElementById('player-overlay').style.display = 'none';
-    document.getElementById('player-controls').style.display = 'none';
-    showSpinner(false);
-
-    let iframe = document.getElementById('drive-iframe');
-    if (!iframe) {
-      iframe = document.createElement('iframe');
-      iframe.id = 'drive-iframe';
-      iframe.style.cssText = `
-        position:absolute; inset:0; width:100%; height:100%;
-        border:none; z-index:3; background:#000;
-      `;
-      iframe.allow = 'autoplay; fullscreen';
-      iframe.allowFullscreen = true;
-      document.getElementById('player-wrap').appendChild(iframe);
-    }
-    iframe.style.display = 'block';
-    // Use Drive's preview player — supports H.265 via platform/WASM codecs
-    iframe.src = `https://drive.google.com/file/d/${fileId}/preview?rm=minimal`;
-
-    showToast('▶ Opening with Drive player (H.265 / MKV)');
-
-    // Show topbar always in iframe mode
-    document.getElementById('player-modal').classList.add('show-ui');
-  }
-
-  /* ══ MSE chunked streaming (MP4 / H.264) ══ */
-  function startMSE(fileId) {
-    const mime = getBestMime();
-    if (!mime || !window.MediaSource) {
-      showToast('⚠️ MSE not supported — try a Chromium browser');
-      showSpinner(false); return;
-    }
-
-    mediaSource = new MediaSource();
-    const blobUrl = URL.createObjectURL(mediaSource);
-    video.src = blobUrl;
-
-    mediaSource.addEventListener('sourceopen', async () => {
-      URL.revokeObjectURL(blobUrl);
-      try {
-        sourceBuffer = mediaSource.addSourceBuffer(mime);
-        sourceBuffer.mode = 'segments';
-        sourceBuffer.addEventListener('updateend', drainQueue);
-        await doFetch(fileId, 0, Math.min(CHUNK_SIZE - 1, currentFileSize - 1));
-        video.play().catch(() => {});
-      } catch(e) {
-        console.warn('MSE sourceopen error:', e.message);
-        showToast('⚠️ Codec error: ' + e.message);
-        showSpinner(false);
-      }
-    }, { once: true });
-
-    video.addEventListener('timeupdate', () => feedMoreChunks(fileId));
-  }
-
-  function getBestMime() {
-    const mimes = [
-      'video/mp4; codecs="avc1.640028,mp4a.40.2"',
-      'video/mp4; codecs="avc1.64001f,mp4a.40.2"',
-      'video/mp4; codecs="avc1.42E01E,mp4a.40.2"',
-      'video/mp4; codecs="avc1.42E01E"',
-      'video/mp4',
-    ];
-    return mimes.find(m => MediaSource.isTypeSupported(m)) || null;
-  }
-
-  async function feedMoreChunks(fileId) {
-    if (isFetching || loadedEnd >= currentFileSize) return;
-    if (!sourceBuffer || sourceBuffer.updating) return;
-    if (mediaSource?.readyState !== 'open') return;
-    const t = video.currentTime;
-    let ahead = 0;
-    for (let i = 0; i < video.buffered.length; i++) {
-      if (video.buffered.start(i) <= t + 1 && video.buffered.end(i) > t)
-        ahead = video.buffered.end(i) - t;
-    }
-    if (ahead > 90) return;
-    const end = Math.min(loadedEnd + CHUNK_SIZE - 1, currentFileSize - 1);
-    await doFetch(fileId, loadedEnd, end);
-  }
-
-  async function doFetch(fileId, start, end) {
-    isFetching = true;
-    fetchController = new AbortController();
-    try {
-      const r = await fetch(
-        `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
-        {
-          headers: { Authorization: `Bearer ${accessToken}`, Range: `bytes=${start}-${end}` },
-          signal: fetchController.signal
-        }
-      );
-      if (!r.ok && r.status !== 206) throw new Error(`HTTP ${r.status}`);
-      const buf = await r.arrayBuffer();
-      loadedEnd = end + 1;
-      appendQueue.push(buf);
-      drainQueue();
-      showSpinner(false);
-    } catch(e) {
-      if (e.name !== 'AbortError') { showToast('Fetch error: ' + e.message); showSpinner(false); }
-    } finally { isFetching = false; }
-  }
-
-  function drainQueue() {
-    if (!sourceBuffer || sourceBuffer.updating || !appendQueue.length) return;
-    try { sourceBuffer.appendBuffer(appendQueue.shift()); } catch(e) {}
-  }
-
-  async function onVideoSeeking() {
-    if (playerMode !== 'native' || !mediaSource || !sourceBuffer) return;
-    const t = video.currentTime;
-    for (let i = 0; i < video.buffered.length; i++) {
-      if (video.buffered.start(i) <= t && video.buffered.end(i) > t) return;
-    }
-    showSpinner(true);
-    if (fetchController) fetchController.abort();
-    isFetching = false; appendQueue = [];
-    const dur = video.duration || 1;
-    const est = Math.floor((t / dur) * currentFileSize);
-    loadedEnd = Math.max(0, est - (est % (1024 * 1024)));
-    const end = Math.min(loadedEnd + CHUNK_SIZE - 1, currentFileSize - 1);
-    await doFetch(currentFileId, loadedEnd, end);
+    showToast('⏳ Starting transcode… first load takes ~5 seconds');
+    video.src = streamUrl;
+    video.load();
+    video.play().catch(e => console.warn('autoplay blocked:', e.message));
   }
 
   function stopStreaming() {
-    if (fetchController) { fetchController.abort(); fetchController = null; }
-    isFetching = false; appendQueue = [];
-    if (mediaSource?.readyState === 'open') try { mediaSource.endOfStream(); } catch(e) {}
-    mediaSource = null; sourceBuffer = null;
-    if (video.src?.startsWith('blob:')) URL.revokeObjectURL(video.src);
-    const iframe = document.getElementById('drive-iframe');
-    if (iframe) { iframe.src = ''; iframe.style.display = 'none'; }
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+  }
+
+  function onVideoError() {
+    const err = video.error;
+    if (!err) return;
+    showSpinner(false);
+    const msg = err.code === 2 ? 'Network error — is Railway server running?'
+              : err.code === 3 ? 'Decode error — check server logs on Railway'
+              : 'Playback error (code ' + err.code + ')';
+    showToast('⚠️ ' + msg);
   }
 
   function closePlayer() {
